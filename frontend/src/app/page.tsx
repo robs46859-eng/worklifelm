@@ -12,10 +12,12 @@ interface SuggestedPrompt {
 interface SwarmResponse {
   status: string;
   complexity: string;
-  model: { model: string; label: string; cost_per_1k: number };
+  model: { model: string; label: string; cost_input_per_1k: number; cost_output_per_1k: number };
   context_retrieved: number;
   context_snippets: string[];
+  response?: string;
   message: string;
+  usage?: { input_tokens: number; output_tokens: number; cost_usd: number };
 }
 
 interface SystemStats {
@@ -100,10 +102,14 @@ export default function CommandCenter() {
       });
       if (res.ok) {
         const data: SwarmResponse = await res.json();
+        const usageLine = data.usage
+          ? `${data.usage.input_tokens + data.usage.output_tokens} tokens · $${data.usage.cost_usd.toFixed(5)}`
+          : '';
+        // Show the full LLM response if available, otherwise the routing message
         setThreadMessages(prev => [...prev, {
           role: 'system',
-          content: data.message,
-          meta: `Model: ${data.model.label} · Complexity: ${data.complexity} · Context nodes: ${data.context_retrieved}`,
+          content: data.response || data.message,
+          meta: `Model: ${data.model.label} · ${data.complexity} · ${data.context_retrieved} context nodes${usageLine ? ' · ' + usageLine : ''}`,
           time: now,
         }]);
         if (data.context_snippets && data.context_snippets.length > 0) {
@@ -245,8 +251,8 @@ export default function CommandCenter() {
                           <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">Swarm Orchestrator</span>
                           <span className="text-xs text-gray-500">{msg.time}</span>
                         </div>
-                        <p className="text-sm text-gray-300 leading-relaxed">{msg.content}</p>
-                        {msg.meta && <p className="text-xs text-gray-600 mt-2 font-mono">{msg.meta}</p>}
+                        <div className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+                        {msg.meta && <p className="text-xs text-gray-600 mt-3 font-mono border-t border-gray-800 pt-2">{msg.meta}</p>}
                       </div>
                     )}
                   </div>

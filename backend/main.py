@@ -1,11 +1,15 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import chromadb
 from pydantic import BaseModel
 import os
 import uuid
 import json
+import httpx
+import asyncio
 from datetime import datetime
+from typing import AsyncGenerator
 
 app = FastAPI(title="WorkLifeLM Brain API")
 
@@ -25,6 +29,17 @@ chroma_client = chromadb.PersistentClient(path=DB_PATH)
 
 # Create or get the master collection
 collection = chroma_client.get_or_create_collection(name="worklifelm_system_brain")
+
+# Anthropic API key — loaded from environment
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# ----- Usage Tracker (in-memory, per-session) -----
+usage_tracker = {
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "total_cost": 0.0,
+    "requests": 0,
+}
 
 # ----- Tier Definitions -----
 TIERS = {
@@ -52,15 +67,38 @@ TIERS = {
 }
 
 # ----- Tiered Model Router -----
-# Maps task complexity to model selection
 MODEL_ROUTING = {
-    "simple": {"model": "claude-3-haiku-20240307", "label": "Haiku (Fast)", "cost_per_1k": 0.00025},
-    "moderate": {"model": "claude-3-5-sonnet-20241022", "label": "Sonnet (Balanced)", "cost_per_1k": 0.003},
-    "complex": {"model": "claude-sonnet-4-20250514", "label": "Opus (Deep)", "cost_per_1k": 0.015},
+    "simple": {"model": "claude-3-5-haiku-20241022", "label": "Haiku 3.5 (Fast)", "cost_input_per_1k": 0.001, "cost_output_per_1k": 0.005},
+    "moderate": {"model": "claude-3-5-sonnet-20241022", "label": "Sonnet 3.5 (Balanced)", "cost_input_per_1k": 0.003, "cost_output_per_1k": 0.015},
+    "complex": {"model": "claude-sonnet-4-20250514", "label": "Sonnet 4 (Deep)", "cost_input_per_1k": 0.003, "cost_output_per_1k": 0.015},
 }
 
-SIMPLE_KEYWORDS = ["summarize", "list", "format", "extract", "label", "classify", "tag"]
-COMPLEX_KEYWORDS = ["architect", "design", "refactor", "debug", "analyze across", "synthesize", "monetization", "strategy", "reverse pitch"]
+SIMPLE_KEYWORDS = ["summarize", "list", "format", "extract", "label", "classify", "tag", "status", "check", "show"]
+COMPLEX_KEYWORDS = ["architect", "design", "refactor", "debug", "analyze across", "synthesize", "monetization", "strategy", "reverse pitch", "pitch deck", "generate a pitch", "cross-project"]
+
+# ----- System Prompt -----
+SYSTEM_PROMPT = """You are WorkLifeLM, a production-focused AI orchestration assistant. You are the central brain for a user's entire work ecosystem.
+
+Your capabilities:
+- Cross-project analysis and synthesis across multiple business verticals
+- Code architecture review and generation (feeding into Codex, Godot, etc.)
+- Business operations: outreach drafts, CRM updates, billing summaries
+- Revenue analysis and monetization path identification
+- Decision debt tracking — flagging unresolved assumptions
+- Pitch generation, marketing copy, and branding assistance
+
+You have access to the user's system brain (vector memory) containing ingested data from GitHub repos, Slack messages, documents, and other sources. When context is provided below, use it to ground your responses in the user's actual data.
+
+Always be:
+1. Actionable — give concrete next steps, not vague advice
+2. Data-grounded — reference the context provided when relevant
+3. Structured — use headers, bullets, and clear formatting
+4. Efficiency-minded — suggest automation opportunities
+
+Current mode context will be provided. Adapt your response style accordingly:
+- Build Mode: Focus on code, architecture, system design
+- Operate Mode: Focus on business processes, outreach, CRM, billing
+- Analyze Mode: Focus on patterns, gaps, monetization, cross-project insights"""
 
 
 def classify_complexity(prompt: str) -> str:
@@ -72,9 +110,86 @@ def classify_complexity(prompt: str) -> str:
     return "moderate"
 
 
+async def call_anthropic(model: str, system: str, user_message: str, max_tokens: int = 2048) -> dict:
+    """Call the Anthropic Messages API and return the response."""
+    if not ANTHROPIC_API_KEY:
+        return {
+            "content": "⚠️ No Anthropic API key configured. Set ANTHROPIC_API_KEY in the backend environment to enable live LLM responses.\n\nIn the meantime, your prompt was successfully routed and classified.",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": model,
+        }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        )
+
+        if response.status_code != 200:
+            error_body = response.text
+            return {
+                "content": f"API Error ({response.status_code}): {error_body[:500]}",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": model,
+            }
+
+        data = response.json()
+        content_blocks = data.get("content", [])
+        text = "\n".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
+        usage = data.get("usage", {})
+
+        return {
+            "content": text,
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "model": data.get("model", model),
+        }
+
+
+async def stream_anthropic(model: str, system: str, user_message: str, max_tokens: int = 2048) -> AsyncGenerator[str, None]:
+    """Stream from the Anthropic Messages API using SSE."""
+    if not ANTHROPIC_API_KEY:
+        yield f"data: {json.dumps({'type': 'content_block_delta', 'delta': {'text': '⚠️ No API key configured. Set ANTHROPIC_API_KEY to enable streaming.'}})}\n\n"
+        yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+        return
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "stream": True,
+                "system": system,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    yield f"{line}\n\n"
+
+
 # ----- Pydantic Models -----
 class IngestionPayload(BaseModel):
-    source: str  # e.g., 'github', 'slack', 'notion', 'upload'
+    source: str
     project_id: str
     content: str
     metadata: dict = {}
@@ -83,6 +198,7 @@ class SwarmRoutePayload(BaseModel):
     prompt: str
     project_id: str = "general"
     user_tier: str = "free"
+    stream: bool = False
 
 class DecisionDebtPayload(BaseModel):
     project_id: str
@@ -98,6 +214,7 @@ async def health_check():
         "brain_nodes": collection.count(),
         "tiers_available": list(TIERS.keys()),
         "model_routing": {k: v["label"] for k, v in MODEL_ROUTING.items()},
+        "api_key_configured": bool(ANTHROPIC_API_KEY),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -144,40 +261,80 @@ async def query_brain(q: str, project_id: str = None, n_results: int = 5):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ----- Swarm Router (Smart Tiered Model Routing) -----
+# ----- Swarm Router (LIVE LLM Integration) -----
 @app.post("/api/swarm/route")
 async def swarm_route(payload: SwarmRoutePayload):
     """
-    Accepts a natural language prompt, classifies complexity,
-    selects the optimal model tier, and returns routing metadata.
-    In production this would dispatch to the actual LLM.
+    The core intelligence endpoint:
+    1. Classifies prompt complexity
+    2. Selects optimal model tier (Haiku / Sonnet / Sonnet 4)
+    3. Retrieves relevant context from the vector brain
+    4. Calls the Anthropic API with context-augmented prompt
+    5. Returns the full LLM response with routing metadata
     """
     complexity = classify_complexity(payload.prompt)
     selected_model = MODEL_ROUTING[complexity]
 
     # Pull relevant context from the brain
-    context_results = []
+    context_snippets = []
     try:
         brain_results = collection.query(
             query_texts=[payload.prompt],
-            n_results=3,
+            n_results=5,
             where={"project": payload.project_id} if payload.project_id != "general" else None,
         )
         if brain_results and brain_results.get("documents"):
-            context_results = brain_results["documents"][0]
+            context_snippets = [doc for doc in brain_results["documents"][0] if doc]
     except Exception:
         pass
 
+    # Build augmented prompt with retrieved context
+    augmented_prompt = payload.prompt
+    if context_snippets:
+        context_block = "\n---\n".join(context_snippets[:5])
+        augmented_prompt = f"""## Retrieved Context from System Brain
+{context_block}
+
+## User Request
+{payload.prompt}
+
+Use the context above to ground your response in the user's actual data where relevant."""
+
+    # Stream response
+    if payload.stream:
+        return StreamingResponse(
+            stream_anthropic(selected_model["model"], SYSTEM_PROMPT, augmented_prompt),
+            media_type="text/event-stream",
+        )
+
+    # Non-streaming: call Anthropic API
+    llm_result = await call_anthropic(selected_model["model"], SYSTEM_PROMPT, augmented_prompt)
+
+    # Track usage
+    input_tokens = llm_result["input_tokens"]
+    output_tokens = llm_result["output_tokens"]
+    cost = (input_tokens / 1000 * selected_model["cost_input_per_1k"]) + (output_tokens / 1000 * selected_model["cost_output_per_1k"])
+    usage_tracker["total_input_tokens"] += input_tokens
+    usage_tracker["total_output_tokens"] += output_tokens
+    usage_tracker["total_cost"] += cost
+    usage_tracker["requests"] += 1
+
     return {
-        "status": "routed",
+        "status": "completed",
         "complexity": complexity,
         "model": selected_model,
+        "model_used": llm_result["model"],
         "user_tier": payload.user_tier,
         "tier_limits": TIERS.get(payload.user_tier, TIERS["free"]),
-        "context_retrieved": len(context_results),
-        "context_snippets": context_results[:3],
-        "prompt": payload.prompt,
-        "message": f"Task classified as '{complexity}'. Routing to {selected_model['label']}.",
+        "context_retrieved": len(context_snippets),
+        "context_snippets": context_snippets[:3],
+        "response": llm_result["content"],
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": round(cost, 6),
+        },
+        "message": f"Completed via {selected_model['label']} ({complexity} complexity). {input_tokens + output_tokens} tokens used.",
     }
 
 
@@ -301,8 +458,11 @@ async def system_stats():
         "brain_nodes": collection.count(),
         "decision_debt_count": decision_debt_collection.count(),
         "active_models": [m["label"] for m in MODEL_ROUTING.values()],
-        "api_spend_today": 12.40,  # placeholder — would be tracked via usage table
+        "api_spend_today": round(usage_tracker["total_cost"], 4),
+        "total_requests": usage_tracker["requests"],
+        "total_tokens": usage_tracker["total_input_tokens"] + usage_tracker["total_output_tokens"],
         "system_healthy": True,
+        "api_key_configured": bool(ANTHROPIC_API_KEY),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
