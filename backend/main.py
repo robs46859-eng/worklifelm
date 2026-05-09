@@ -467,6 +467,239 @@ async def system_stats():
     }
 
 
+# =====================================================================
+#  PHASE 5 — OUTPUT GENERATORS
+# =====================================================================
+
+class OutputRequest(BaseModel):
+    topic: str
+    project_id: str = "general"
+    user_tier: str = "free"
+    additional_context: str = ""
+
+
+async def _generate_output(system_instruction: str, user_prompt: str, model_key: str = "moderate") -> dict:
+    """Shared helper: calls the Anthropic API and tracks usage."""
+    selected = MODEL_ROUTING[model_key]
+    result = await call_anthropic(selected["model"], system_instruction, user_prompt, max_tokens=4096)
+    cost = (result["input_tokens"] / 1000 * selected["cost_input_per_1k"]) + (result["output_tokens"] / 1000 * selected["cost_output_per_1k"])
+    usage_tracker["total_input_tokens"] += result["input_tokens"]
+    usage_tracker["total_output_tokens"] += result["output_tokens"]
+    usage_tracker["total_cost"] += cost
+    usage_tracker["requests"] += 1
+    return {
+        "content": result["content"],
+        "model_used": result["model"],
+        "usage": {"input_tokens": result["input_tokens"], "output_tokens": result["output_tokens"], "cost_usd": round(cost, 6)},
+    }
+
+
+# ----- Report Generator -----
+@app.post("/api/outputs/report")
+async def generate_report(req: OutputRequest):
+    """Generates a structured executive report on the given topic."""
+    system = """You are a senior analyst producing executive reports for WorkLifeLM.
+Output a complete, well-structured report in markdown with:
+- Executive Summary (2-3 sentences)
+- Key Findings (bulleted)
+- Analysis (2-3 detailed paragraphs)
+- Recommendations (numbered action items)
+- Risk Factors
+- Next Steps with timeline
+Be data-driven, concise, and actionable."""
+
+    prompt = f"Generate a comprehensive report on: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nAdditional context: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": "report", "output": result}
+
+
+# ----- Slide Deck Generator -----
+@app.post("/api/outputs/slides")
+async def generate_slides(req: OutputRequest):
+    """Generates a slide deck as structured JSON slides."""
+    system = """You are a presentation designer for WorkLifeLM.
+Generate a professional slide deck as a JSON array. Each slide object has:
+{"slide_number": 1, "title": "...", "bullets": ["...", "..."], "speaker_notes": "..."}
+
+Rules:
+- 8-12 slides total
+- First slide is a title slide with subtitle
+- Last slide is a "Next Steps / Call to Action" slide
+- Keep bullets to 3-5 per slide, concise
+- Speaker notes should be 1-2 sentences of context
+
+Output ONLY the JSON array, no markdown fences."""
+
+    prompt = f"Create a pitch/presentation deck on: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nContext: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "moderate")
+
+    # Try to parse JSON
+    slides = []
+    try:
+        content = result["content"].strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+        slides = json.loads(content)
+    except Exception:
+        slides = [{"slide_number": 1, "title": "Generated Content", "bullets": [result["content"][:500]], "speaker_notes": "Raw output — JSON parsing failed."}]
+
+    return {"status": "success", "type": "slides", "slides": slides, "usage": result["usage"]}
+
+
+# ----- Mind Map Generator -----
+@app.post("/api/outputs/mindmap")
+async def generate_mindmap(req: OutputRequest):
+    """Generates a mind map as a nested JSON structure."""
+    system = """You are a knowledge architect for WorkLifeLM.
+Generate a mind map as a JSON object with this recursive structure:
+{"label": "Central Topic", "children": [{"label": "Branch 1", "children": [{"label": "Leaf 1"}, {"label": "Leaf 2"}]}, ...]}
+
+Rules:
+- Central node is the main topic
+- 4-6 primary branches
+- Each branch has 2-4 children
+- Use concise labels (3-6 words)
+- Output ONLY the JSON object, no markdown fences."""
+
+    prompt = f"Create a mind map for: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nContext: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "simple")
+
+    mindmap = {}
+    try:
+        content = result["content"].strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+        mindmap = json.loads(content)
+    except Exception:
+        mindmap = {"label": req.topic, "children": [{"label": "See raw output"}]}
+
+    return {"status": "success", "type": "mindmap", "mindmap": mindmap, "usage": result["usage"]}
+
+
+# ----- Flashcard Generator -----
+@app.post("/api/outputs/flashcards")
+async def generate_flashcards(req: OutputRequest):
+    """Generates study flashcards as a JSON array."""
+    system = """You are an educational content creator for WorkLifeLM.
+Generate flashcards as a JSON array. Each card:
+{"front": "Question or term", "back": "Answer or definition"}
+
+Rules:
+- Generate 10-15 flashcards
+- Mix conceptual, factual, and application questions
+- Keep answers concise but complete
+- Output ONLY the JSON array, no markdown fences."""
+
+    prompt = f"Create flashcards covering: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nContext: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "simple")
+
+    cards = []
+    try:
+        content = result["content"].strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+        cards = json.loads(content)
+    except Exception:
+        cards = [{"front": "Error", "back": "Could not parse flashcards."}]
+
+    return {"status": "success", "type": "flashcards", "cards": cards, "count": len(cards), "usage": result["usage"]}
+
+
+# ----- Quiz Generator -----
+@app.post("/api/outputs/quiz")
+async def generate_quiz(req: OutputRequest):
+    """Generates a multiple-choice quiz as a JSON array."""
+    system = """You are a quiz builder for WorkLifeLM.
+Generate a multiple-choice quiz as a JSON array. Each question:
+{"question": "...", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "correct": "B", "explanation": "..."}
+
+Rules:
+- Generate 10 questions
+- 4 options each, exactly one correct
+- Include a brief explanation for the correct answer
+- Output ONLY the JSON array, no markdown fences."""
+
+    prompt = f"Create a quiz on: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nContext: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "simple")
+
+    questions = []
+    try:
+        content = result["content"].strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+        questions = json.loads(content)
+    except Exception:
+        questions = [{"question": "Error", "options": ["A) Could not parse"], "correct": "A", "explanation": "Parsing failed."}]
+
+    return {"status": "success", "type": "quiz", "questions": questions, "count": len(questions), "usage": result["usage"]}
+
+
+# ----- Audio Overview Script Generator -----
+@app.post("/api/outputs/audio-script")
+async def generate_audio_script(req: OutputRequest):
+    """Generates a conversational podcast-style script for audio overviews."""
+    system = """You are a podcast scriptwriter for WorkLifeLM Audio Overviews.
+Write a conversational, engaging audio script between two hosts discussing the topic.
+
+Format:
+HOST_A: [dialogue]
+HOST_B: [dialogue]
+
+Rules:
+- 3-5 minute read time (roughly 500-800 words)
+- Start with a hook that grabs attention
+- Include key insights and takeaways
+- End with a clear summary and call to action
+- Make it sound natural, not robotic
+- Use analogies and examples to explain complex concepts"""
+
+    prompt = f"Write an audio overview script about: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nContext to weave in: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": "audio_script", "script": result["content"], "usage": result["usage"]}
+
+
+# ----- Pitch Deck (Reverse Pitch) Generator -----
+@app.post("/api/outputs/pitch")
+async def generate_pitch(req: OutputRequest):
+    """The 'Reverse Pitch' feature — the system pitches YOU on the next best move."""
+    system = """You are a strategic advisor for WorkLifeLM's Reverse Pitch feature.
+The user has provided their project context. Your job is to PITCH THEM on what they should do next.
+
+Structure your pitch as:
+1. **The Opportunity** — What you see based on their data
+2. **The Angle** — A specific, non-obvious approach
+3. **The Numbers** — Revenue/impact estimates (even rough ones)
+4. **The Play** — Concrete 3-step execution plan
+5. **The Risk** — What could go wrong and the mitigation
+
+Be bold, specific, and actionable. This is not a summary — it's a strategic recommendation."""
+
+    prompt = f"Reverse-pitch me on the next best move for: {req.topic}"
+    if req.additional_context:
+        prompt += f"\n\nHere's what I know: {req.additional_context}"
+
+    result = await _generate_output(system, prompt, "complex")
+    return {"status": "success", "type": "pitch", "pitch": result["content"], "usage": result["usage"]}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

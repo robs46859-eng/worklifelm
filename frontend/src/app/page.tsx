@@ -201,7 +201,7 @@ export default function CommandCenter() {
           </div>
           <div className="flex items-center space-x-3">
             <a href="/pricing" className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-sm rounded border border-gray-700 transition-colors">Pricing</a>
-            <button className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded shadow-lg shadow-blue-900/50 transition-colors">Generate Output</button>
+            <a href="/outputs" className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded shadow-lg shadow-blue-900/50 transition-colors">Generate Output</a>
           </div>
         </header>
 
