@@ -15,6 +15,10 @@ from auth import (
     get_current_user, check_rate_limit, record_usage, get_usage_summary,
     get_user_by_id, update_user_tier,
 )
+from billing import (
+    create_checkout_session, handle_webhook_event, create_billing_portal,
+    STRIPE_PUBLISHABLE_KEY,
+)
 
 app = FastAPI(title="WorkLifeLM Brain API")
 
@@ -290,6 +294,73 @@ async def usage_endpoint(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return get_usage_summary(user["id"], user["tier"])
+
+
+# =====================================================================
+#  BILLING ENDPOINTS
+# =====================================================================
+
+class CheckoutPayload(BaseModel):
+    tier: str  # 'professional' or 'max'
+
+@app.post("/api/billing/checkout")
+async def create_checkout(payload: CheckoutPayload, request: Request):
+    """Create a Stripe Checkout session for upgrading."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if payload.tier not in ("professional", "max"):
+        raise HTTPException(status_code=400, detail="Invalid tier")
+
+    base_url = str(request.base_url).rstrip("/")
+    result = create_checkout_session(
+        user_id=user["id"],
+        user_email=user["email"],
+        tier=payload.tier,
+        success_url=f"{base_url}/pricing?upgraded=true",
+        cancel_url=f"{base_url}/pricing?cancelled=true",
+    )
+    return {"status": "checkout_created", **result}
+
+
+@app.post("/api/billing/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events for subscription lifecycle."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+    try:
+        if webhook_secret:
+            result = handle_webhook_event(payload, sig_header, webhook_secret)
+        else:
+            # Without webhook secret, parse event directly (dev mode)
+            import stripe
+            event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+            result = {"action": "received", "event_type": event["type"]}
+        return {"status": "ok", **result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/billing/portal")
+async def billing_portal(request: Request):
+    """Create a Stripe Customer Portal session for managing subscriptions."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not user.get("stripe_customer_id"):
+        raise HTTPException(status_code=400, detail="No active subscription")
+
+    base_url = str(request.base_url).rstrip("/")
+    result = create_billing_portal(user["stripe_customer_id"], f"{base_url}/pricing")
+    return {"status": "portal_created", **result}
+
+
+@app.get("/api/billing/config")
+async def billing_config():
+    """Return Stripe publishable key for the frontend."""
+    return {"publishable_key": STRIPE_PUBLISHABLE_KEY}
 
 
 # ----- Ingestion -----
