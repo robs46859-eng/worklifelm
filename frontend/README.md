@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WorkLifeLM — Frontend
 
-## Getting Started
+Next.js 16 (App Router) + React 19 + Tailwind v4 + TypeScript 5 (strict).
 
-First, run the development server:
+This is the user-facing Command Center for WorkLifeLM. It talks to the FastAPI backend at `/api/*` (proxied by Caddy in production, called directly in dev when both servers are running locally).
+
+## Pages
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `/` | ✅ client redirect | Dashboard — 3 modes (Build / Operate / Analyze), live stats, swarm chat |
+| `/login` | ❌ | Sign in / Register |
+| `/profile` | ✅ | Edit profile, change password, manage subscription |
+| `/pricing` | ❌ | Tier comparison + Stripe Checkout |
+| `/outputs` | ✅ | 8 output generators + saved-output library (archive / download) |
+
+## Develop
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# → http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dashboard expects the backend at `http://localhost:8000`. Easiest path is to run Caddy locally with the production `Caddyfile`, or proxy `/api` to `:8000` in `next.config.ts` for dev.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm run start  # production server on :3000 (or :3001 in prod)
+```
 
-## Learn More
+## Lint
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run lint
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+ESLint uses the new flat config (`eslint.config.mjs`) with `eslint-config-next`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Notes
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Tailwind v4 — no `tailwind.config.ts`. Configuration lives in `src/app/globals.css` via `@import "tailwindcss"`. PostCSS plugin is wired up in `postcss.config.mjs`.
+- Auth is JWT in `localStorage` under the key `wlm_token`, with the user object under `wlm_user`. Pages enforce auth client-side via `useEffect`.
+- See the root [`COMPONENTS.md`](../COMPONENTS.md) for the full module inventory and [`TROUBLESHOOT.md`](../TROUBLESHOOT.md) for deploy issues.
