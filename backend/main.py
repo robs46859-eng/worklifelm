@@ -68,9 +68,9 @@ TIERS = {
 
 # ----- Tiered Model Router -----
 MODEL_ROUTING = {
-    "simple": {"model": "claude-3-5-haiku-20241022", "label": "Haiku 3.5 (Fast)", "cost_input_per_1k": 0.001, "cost_output_per_1k": 0.005},
-    "moderate": {"model": "claude-3-5-sonnet-20241022", "label": "Sonnet 3.5 (Balanced)", "cost_input_per_1k": 0.003, "cost_output_per_1k": 0.015},
-    "complex": {"model": "claude-sonnet-4-20250514", "label": "Sonnet 4 (Deep)", "cost_input_per_1k": 0.003, "cost_output_per_1k": 0.015},
+    "simple": {"model": "claude-haiku-4-5-20251001", "label": "Haiku 4.5 (Fast)", "cost_input_per_1k": 0.001, "cost_output_per_1k": 0.005},
+    "moderate": {"model": "claude-sonnet-4-6", "label": "Sonnet 4.6 (Balanced)", "cost_input_per_1k": 0.003, "cost_output_per_1k": 0.015},
+    "complex": {"model": "claude-opus-4-7", "label": "Opus 4.7 (Deep)", "cost_input_per_1k": 0.015, "cost_output_per_1k": 0.075},
 }
 
 SIMPLE_KEYWORDS = ["summarize", "list", "format", "extract", "label", "classify", "tag", "status", "check", "show"]
