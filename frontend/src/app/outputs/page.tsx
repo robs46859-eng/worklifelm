@@ -1,26 +1,27 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const API_BASE = '/api';
 
-type OutputType = 'report' | 'slides' | 'mindmap' | 'flashcards' | 'quiz' | 'audio-script' | 'pitch';
+type OutputType = 'report' | 'slides' | 'mindmap' | 'flashcards' | 'quiz' | 'audio-script' | 'pitch' | 'video';
 
 interface OutputOption {
   key: OutputType;
   label: string;
   description: string;
   icon: string;
-  color: string;
+  comingSoon?: boolean;
 }
 
 const OUTPUT_OPTIONS: OutputOption[] = [
-  { key: 'report', label: 'Report', description: 'Executive report with findings & recommendations', icon: '📊', color: 'blue' },
-  { key: 'slides', label: 'Slide Deck', description: 'Structured presentation with speaker notes', icon: '📽️', color: 'purple' },
-  { key: 'mindmap', label: 'Mind Map', description: 'Visual knowledge map with branches', icon: '🧠', color: 'pink' },
-  { key: 'flashcards', label: 'Flashcards', description: 'Study cards with Q&A pairs', icon: '🃏', color: 'green' },
-  { key: 'quiz', label: 'Quiz', description: 'Multiple choice assessment', icon: '✅', color: 'orange' },
-  { key: 'audio-script', label: 'Audio Overview', description: 'Podcast-style conversation script', icon: '🎙️', color: 'red' },
-  { key: 'pitch', label: 'Reverse Pitch', description: 'AI pitches you on your next best move', icon: '🚀', color: 'yellow' },
+  { key: 'report', label: 'Report', description: 'Executive report with findings & recommendations', icon: '📊' },
+  { key: 'slides', label: 'Slide Deck', description: 'Structured presentation with speaker notes', icon: '📽️' },
+  { key: 'mindmap', label: 'Mind Map', description: 'Visual knowledge map with branches', icon: '🧠' },
+  { key: 'flashcards', label: 'Flashcards', description: 'Study cards with Q&A pairs', icon: '🃏' },
+  { key: 'quiz', label: 'Quiz', description: 'Multiple choice assessment', icon: '✅' },
+  { key: 'audio-script', label: 'Audio Overview', description: 'Podcast-style conversation script', icon: '🎙️' },
+  { key: 'pitch', label: 'Reverse Pitch', description: 'AI pitches you on your next best move', icon: '🚀' },
+  { key: 'video', label: 'Video Overview', description: 'AI-generated video storyboard & production plan', icon: '🎬', comingSoon: true },
 ];
 
 export default function OutputsPage() {
@@ -29,6 +30,22 @@ export default function OutputsPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
+  // Auth gate
+  useEffect(() => {
+    const token = localStorage.getItem('wlm_token');
+    if (!token) {
+      window.location.href = '/login';
+    }
+  }, []);
+
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('wlm_token');
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    };
+  };
+
   const handleGenerate = async () => {
     if (!selectedType || !topic.trim()) return;
     setLoading(true);
@@ -36,7 +53,7 @@ export default function OutputsPage() {
     try {
       const res = await fetch(`${API_BASE}/outputs/${selectedType}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ topic, project_id: 'general', user_tier: 'free' }),
       });
       if (res.ok) setResult(await res.json());
@@ -129,12 +146,23 @@ export default function OutputsPage() {
       return <div className="whitespace-pre-wrap text-sm text-gray-300 leading-relaxed">{result.pitch as string}</div>;
     }
 
+    if (type === 'video') {
+      return (
+        <div>
+          <div className="bg-purple-900/20 border border-purple-700/50 rounded-lg p-4 mb-4">
+            <p className="text-sm text-purple-300">🎬 <strong>Coming Soon:</strong> {String(result.message)}</p>
+            <p className="text-xs text-purple-400 mt-1">Full AI video rendering pipeline is under development.</p>
+          </div>
+          <div className="whitespace-pre-wrap text-sm text-gray-300 leading-relaxed">{result.storyboard as string}</div>
+        </div>
+      );
+    }
+
     return <pre className="text-xs text-gray-400">{JSON.stringify(result, null, 2)}</pre>;
   };
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-gray-200 font-sans">
-      {/* Header */}
       <header className="h-16 border-b border-gray-800 bg-[#111] flex items-center justify-between px-6">
         <div className="flex items-center space-x-4">
           <a href="/" className="text-xl font-bold tracking-wider text-white">WorkLife<span className="text-blue-500">LM</span></a>
@@ -144,13 +172,13 @@ export default function OutputsPage() {
       </header>
 
       <div className="max-w-5xl mx-auto p-8">
-        {/* Output Type Selector */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
           {OUTPUT_OPTIONS.map(opt => (
             <button key={opt.key}
-              onClick={() => { setSelectedType(opt.key); setResult(null); }}
-              className={`p-4 rounded-lg border text-left transition-all ${selectedType === opt.key ? 'border-blue-500 bg-blue-900/20 shadow-lg shadow-blue-900/20' : 'border-gray-800 bg-[#111] hover:border-gray-600'}`}
+              onClick={() => { if (!opt.comingSoon) { setSelectedType(opt.key); setResult(null); } }}
+              className={`p-4 rounded-lg border text-left transition-all relative ${opt.comingSoon ? 'border-gray-800 bg-[#111] opacity-60 cursor-default' : selectedType === opt.key ? 'border-blue-500 bg-blue-900/20 shadow-lg shadow-blue-900/20' : 'border-gray-800 bg-[#111] hover:border-gray-600'}`}
             >
+              {opt.comingSoon && <span className="absolute top-2 right-2 text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded-full border border-purple-700/30">SOON</span>}
               <span className="text-2xl">{opt.icon}</span>
               <h3 className="text-sm font-bold text-white mt-2">{opt.label}</h3>
               <p className="text-xs text-gray-500 mt-1">{opt.description}</p>
@@ -158,7 +186,6 @@ export default function OutputsPage() {
           ))}
         </div>
 
-        {/* Input */}
         {selectedType && (
           <div className="mb-8">
             <div className="flex space-x-3">
@@ -181,14 +208,12 @@ export default function OutputsPage() {
           </div>
         )}
 
-        {/* Loading */}
         {loading && (
           <div className="bg-[#111] border border-gray-800 rounded-lg p-8 text-center animate-pulse">
             <p className="text-blue-400 text-sm">Routing to optimal model and generating output...</p>
           </div>
         )}
 
-        {/* Result */}
         {result && (
           <div className="bg-[#111] border border-gray-800 rounded-lg p-6">
             <div className="flex justify-between items-center mb-4 pb-4 border-b border-gray-800">

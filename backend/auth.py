@@ -114,6 +114,56 @@ def update_user_tier(user_id: int, tier: str, stripe_customer_id: str = None, st
     conn.close()
 
 
+def update_user_profile(user_id: int, name: str = None, email: str = None) -> dict:
+    """Update user profile fields."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    if name is not None:
+        conn.execute("UPDATE users SET name = ?, updated_at = ? WHERE id = ?", (name, datetime.utcnow().isoformat(), user_id))
+    if email is not None:
+        try:
+            conn.execute("UPDATE users SET email = ?, updated_at = ? WHERE id = ?", (email.lower().strip(), datetime.utcnow().isoformat(), user_id))
+        except sqlite3.IntegrityError:
+            conn.close()
+            raise HTTPException(status_code=409, detail="Email already in use")
+    conn.commit()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(user) if user else {}
+
+
+def change_password(user_id: int, current_password: str, new_password: str) -> bool:
+    """Change user password after verifying current password."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+    if not bcrypt.checkpw(current_password.encode(), user["password_hash"].encode()):
+        conn.close()
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    conn.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (new_hash, datetime.utcnow().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def reset_password_by_email(email: str, new_password: str) -> bool:
+    """Admin-level password reset by email (no current password needed)."""
+    conn = sqlite3.connect(DB_PATH)
+    user = conn.execute("SELECT id FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Email not found")
+    new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    conn.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (new_hash, datetime.utcnow().isoformat(), user[0]))
+    conn.commit()
+    conn.close()
+    return True
+
+
 # ----- JWT Tokens -----
 def create_token(user: dict) -> str:
     payload = {

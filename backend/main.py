@@ -13,7 +13,8 @@ from typing import AsyncGenerator, Optional
 from auth import (
     init_auth_db, create_user, authenticate_user, create_token,
     get_current_user, check_rate_limit, record_usage, get_usage_summary,
-    get_user_by_id, update_user_tier,
+    get_user_by_id, update_user_tier, update_user_profile, change_password,
+    reset_password_by_email,
 )
 from billing import (
     create_checkout_session, handle_webhook_event, create_billing_portal,
@@ -294,6 +295,59 @@ async def usage_endpoint(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return get_usage_summary(user["id"], user["tier"])
+
+
+class ProfileUpdatePayload(BaseModel):
+    name: str = None
+    email: str = None
+
+class PasswordChangePayload(BaseModel):
+    current_password: str
+    new_password: str
+
+class PasswordResetPayload(BaseModel):
+    email: str
+    new_password: str
+
+
+@app.put("/api/auth/profile")
+async def update_profile(payload: ProfileUpdatePayload, request: Request):
+    """Update user profile (name, email)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    updated = update_user_profile(user["id"], name=payload.name, email=payload.email)
+    # Refresh token with updated info
+    token = create_token(updated)
+    return {
+        "status": "updated",
+        "token": token,
+        "user": {"id": updated["id"], "email": updated["email"], "name": updated["name"], "tier": updated["tier"]},
+    }
+
+
+@app.post("/api/auth/change-password")
+async def change_pw(payload: PasswordChangePayload, request: Request):
+    """Change password (requires current password)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    change_password(user["id"], payload.current_password, payload.new_password)
+    return {"status": "password_changed"}
+
+
+@app.post("/api/auth/reset-password")
+async def reset_pw(payload: PasswordResetPayload, request: Request):
+    """Admin-only password reset by email."""
+    user = await get_current_user(request)
+    if not user or user.get("tier") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    reset_password_by_email(payload.email, payload.new_password)
+    return {"status": "password_reset", "email": payload.email}
 
 
 # =====================================================================
@@ -1001,6 +1055,44 @@ Make it implementable. Reference real tools (Zapier, n8n, custom API calls) wher
     prompt = f"Design a workflow for: {payload.description}\nTriggers: {triggers_str}"
     result = await _generate_output(system, prompt, "complex")
     return {"status": "success", "type": "workflow", "output": result["content"], "usage": result["usage"]}
+
+
+# =====================================================================
+#  VIDEO GENERATION (Coming Soon — Scaffold)
+# =====================================================================
+
+class VideoRequest(BaseModel):
+    topic: str
+    style: str = "explainer"  # explainer | cinematic | walkthrough
+    duration_seconds: int = 60
+    project_id: str = "general"
+
+@app.post("/api/outputs/video")
+async def generate_video(req: VideoRequest):
+    """Video generation endpoint — currently generates a storyboard script.
+    Full video rendering pipeline will be integrated in a future release."""
+    system = f"""You are a video production planner for WorkLifeLM.
+Generate a detailed storyboard for a {req.style} video (~{req.duration_seconds}s).
+
+For each scene, output:
+- **Scene #**: Title
+- **Duration**: X seconds
+- **Visual**: What the viewer sees (describe the shot, graphics, text overlays)
+- **Narration**: Exact voiceover script for this scene
+- **Music/SFX**: Mood or specific sound cues
+
+Make it production-ready. Total duration should be approximately {req.duration_seconds} seconds."""
+
+    prompt = f"Create a {req.style} video storyboard about: {req.topic}"
+    result = await _generate_output(system, prompt, "complex")
+    return {
+        "status": "success",
+        "type": "video",
+        "pipeline": "coming_soon",
+        "message": "Video rendering pipeline coming soon. Here is your production-ready storyboard:",
+        "storyboard": result["content"],
+        "usage": result["usage"],
+    }
 
 
 if __name__ == "__main__":

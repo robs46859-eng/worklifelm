@@ -43,6 +43,18 @@ export default function CommandCenter() {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [decisions, setDecisions] = useState<DecisionItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [user, setUser] = useState<{id: number; email: string; name: string; tier: string} | null>(null);
+
+  // Auth gate
+  useEffect(() => {
+    const token = localStorage.getItem('wlm_token');
+    const stored = localStorage.getItem('wlm_user');
+    if (!token || !stored) {
+      window.location.href = '/login';
+      return;
+    }
+    setUser(JSON.parse(stored));
+  }, []);
 
   // Fetch system stats
   const fetchStats = useCallback(async () => {
@@ -202,6 +214,13 @@ export default function CommandCenter() {
           <div className="flex items-center space-x-3">
             <a href="/pricing" className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 text-sm rounded border border-gray-700 transition-colors">Pricing</a>
             <a href="/outputs" className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded shadow-lg shadow-blue-900/50 transition-colors">Generate Output</a>
+            {user && (
+              <>
+                <a href="/profile" className="px-3 py-1.5 text-sm text-gray-300 hover:text-white transition-colors">{user.name || user.email}</a>
+                <span className="text-xs bg-blue-900/30 text-blue-400 border border-blue-800/50 px-2 py-0.5 rounded-full">{user.tier}</span>
+                <button onClick={() => { localStorage.removeItem('wlm_token'); localStorage.removeItem('wlm_user'); window.location.href = '/login'; }} className="px-3 py-1.5 text-sm text-gray-500 hover:text-red-400 transition-colors">Logout</button>
+              </>
+            )}
           </div>
         </header>
 
