@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import chromadb
@@ -9,9 +9,19 @@ import json
 import httpx
 import asyncio
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
+from auth import (
+    init_auth_db, create_user, authenticate_user, create_token,
+    get_current_user, check_rate_limit, record_usage, get_usage_summary,
+    get_user_by_id, update_user_tier,
+)
 
 app = FastAPI(title="WorkLifeLM Brain API")
+
+# Initialize auth database on startup
+@app.on_event("startup")
+def startup():
+    init_auth_db()
 
 # CORS for the Next.js frontend
 app.add_middleware(
@@ -200,6 +210,15 @@ class SwarmRoutePayload(BaseModel):
     user_tier: str = "free"
     stream: bool = False
 
+class RegisterPayload(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
 class DecisionDebtPayload(BaseModel):
     project_id: str
     assumption: str
@@ -217,6 +236,60 @@ async def health_check():
         "api_key_configured": bool(ANTHROPIC_API_KEY),
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+# =====================================================================
+#  AUTH ENDPOINTS
+# =====================================================================
+
+@app.post("/api/auth/register")
+async def register(payload: RegisterPayload):
+    """Register a new user account."""
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    user = create_user(payload.email, payload.password, payload.name)
+    token = create_token(user)
+    return {
+        "status": "registered",
+        "token": token,
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"], "tier": user["tier"]},
+    }
+
+
+@app.post("/api/auth/login")
+async def login(payload: LoginPayload):
+    """Login and receive a JWT token."""
+    user = authenticate_user(payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_token(user)
+    return {
+        "status": "authenticated",
+        "token": token,
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"], "tier": user["tier"]},
+    }
+
+
+@app.get("/api/auth/profile")
+async def profile(request: Request):
+    """Get current user profile and usage summary."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    usage = get_usage_summary(user["id"], user["tier"])
+    return {
+        "user": {"id": user["id"], "email": user["email"], "name": user["name"], "tier": user["tier"]},
+        "usage": usage,
+    }
+
+
+@app.get("/api/auth/usage")
+async def usage_endpoint(request: Request):
+    """Get detailed usage for the current user."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return get_usage_summary(user["id"], user["tier"])
 
 
 # ----- Ingestion -----
