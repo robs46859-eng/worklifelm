@@ -12,7 +12,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Request, HTTPException
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "worklifelm-secret-key-change-in-production-2026")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET environment variable must be set")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 72
 
