@@ -773,6 +773,165 @@ Be bold, specific, and actionable. This is not a summary — it's a strategic re
     return {"status": "success", "type": "pitch", "pitch": result["content"], "usage": result["usage"]}
 
 
+# =====================================================================
+#  PHASE 7 — OPERATIONAL AGENTS (Operate Mode)
+# =====================================================================
+
+class CRMPayload(BaseModel):
+    contacts: list[dict] = []  # [{"name": "...", "company": "...", "last_contact": "...", "status": "..."}]
+    goal: str = "follow-up"
+    project_id: str = "general"
+
+class InvoicePayload(BaseModel):
+    items: list[dict] = []  # [{"client": "...", "amount": 100, "status": "pending", "due": "2026-05-15"}]
+    action: str = "summary"  # summary | reminder | forecast
+    project_id: str = "general"
+
+class TeamPayload(BaseModel):
+    team: list[dict] = []  # [{"name": "...", "role": "...", "current_tasks": ["..."]}]
+    request: str = ""
+    project_id: str = "general"
+
+class OutreachPayload(BaseModel):
+    target_audience: str
+    product_or_service: str
+    tone: str = "professional"
+    channel: str = "email"  # email | linkedin | cold-call-script
+    count: int = 3
+    project_id: str = "general"
+
+class WorkflowPayload(BaseModel):
+    description: str
+    triggers: list[str] = []
+    project_id: str = "general"
+
+
+# ----- CRM Follow-Up Agent -----
+@app.post("/api/agents/crm")
+async def crm_agent(payload: CRMPayload):
+    """Generates personalized follow-up drafts for CRM contacts."""
+    system = """You are a CRM automation agent for WorkLifeLM.
+Given a list of contacts with their status and history, generate personalized follow-up messages.
+
+For each contact, output:
+- **To:** Contact name (Company)
+- **Subject:** Email subject line
+- **Body:** 3-5 sentence personalized message
+- **Suggested action:** What to do next (call, send proposal, schedule meeting, etc.)
+
+Be warm but professional. Reference any context about the contact. Always include a clear CTA."""
+
+    contacts_str = "\n".join(
+        f"- {c.get('name', 'Unknown')} at {c.get('company', 'N/A')}, status: {c.get('status', 'unknown')}, last contact: {c.get('last_contact', 'unknown')}"
+        for c in payload.contacts
+    ) if payload.contacts else "No contacts provided — generate 3 example follow-up templates for a SaaS business."
+
+    prompt = f"Goal: {payload.goal}\n\nContacts:\n{contacts_str}"
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": "crm_followup", "output": result["content"], "usage": result["usage"]}
+
+
+# ----- Billing / Invoice Agent -----
+@app.post("/api/agents/billing")
+async def billing_agent(payload: InvoicePayload):
+    """Summarizes invoices, generates reminders, or forecasts revenue."""
+    actions_map = {
+        "summary": "Analyze the invoices and provide an executive billing summary including total outstanding, overdue amount, and collection priority.",
+        "reminder": "Generate polite but firm payment reminder emails for each overdue invoice.",
+        "forecast": "Based on the invoice data, project revenue for the next 30/60/90 days.",
+    }
+    system = f"""You are a billing automation agent for WorkLifeLM.
+{actions_map.get(payload.action, actions_map['summary'])}
+
+Be precise with numbers. Use tables where helpful. Flag any risk items."""
+
+    items_str = "\n".join(
+        f"- {i.get('client', 'Unknown')}: ${i.get('amount', 0)} ({i.get('status', 'unknown')}), due: {i.get('due', 'N/A')}"
+        for i in payload.items
+    ) if payload.items else "No invoices provided — generate an example billing summary with 5 sample invoices."
+
+    prompt = f"Action: {payload.action}\n\nInvoices:\n{items_str}"
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": f"billing_{payload.action}", "output": result["content"], "usage": result["usage"]}
+
+
+# ----- Employee / Team Management Agent -----
+@app.post("/api/agents/team")
+async def team_agent(payload: TeamPayload):
+    """Manages team task assignments, workload balancing, and status reports."""
+    system = """You are a team management agent for WorkLifeLM.
+Given the team roster and their current tasks, help the user manage workload.
+
+Capabilities:
+- Generate task assignments based on skills and availability
+- Identify bottlenecks and overloaded team members
+- Create daily/weekly status report summaries
+- Suggest workflow improvements
+
+Output structured, actionable recommendations. Use tables for task assignments."""
+
+    team_str = "\n".join(
+        f"- {m.get('name', 'Unknown')} ({m.get('role', 'N/A')}): {', '.join(m.get('current_tasks', ['no tasks']))}"
+        for m in payload.team
+    ) if payload.team else "No team data provided — generate an example team management plan for a 5-person startup."
+
+    prompt = f"Request: {payload.request or 'Generate a team status report and optimization suggestions.'}\n\nTeam:\n{team_str}"
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": "team_management", "output": result["content"], "usage": result["usage"]}
+
+
+# ----- Outreach / Marketing Campaign Agent -----
+@app.post("/api/agents/outreach")
+async def outreach_agent(payload: OutreachPayload):
+    """Generates multi-channel outreach campaigns."""
+    channel_instructions = {
+        "email": "Generate professional cold outreach emails with subject line, body, and PS line.",
+        "linkedin": "Generate LinkedIn connection request messages (300 char limit) and follow-up DMs.",
+        "cold-call-script": "Generate a cold-call script with opener, value prop, objection handling, and close.",
+    }
+
+    system = f"""You are an outreach and marketing agent for WorkLifeLM.
+{channel_instructions.get(payload.channel, channel_instructions['email'])}
+
+Rules:
+- Generate {payload.count} unique variations
+- Tone: {payload.tone}
+- Each variation should have a different angle/hook
+- Include personalization placeholders like [Name], [Company]
+- End each with a clear CTA"""
+
+    prompt = f"Target audience: {payload.target_audience}\nProduct/Service: {payload.product_or_service}\nChannel: {payload.channel}"
+    result = await _generate_output(system, prompt, "moderate")
+    return {"status": "success", "type": f"outreach_{payload.channel}", "output": result["content"], "count": payload.count, "usage": result["usage"]}
+
+
+# ----- Workflow Automation Agent -----
+@app.post("/api/agents/workflow")
+async def workflow_agent(payload: WorkflowPayload):
+    """Designs automation workflows with triggers, actions, and conditions."""
+    system = """You are a workflow automation architect for WorkLifeLM.
+Design a detailed automation workflow based on the user's description.
+
+Output format:
+1. **Workflow Name**
+2. **Trigger(s)** — what starts the workflow
+3. **Steps** — numbered sequence of actions, each with:
+   - Action description
+   - Tool/service involved
+   - Input → Output
+   - Error handling / fallback
+4. **Conditions** — any branching logic (if/else)
+5. **Schedule** — frequency or event-based
+6. **Estimated time saved** per week
+
+Make it implementable. Reference real tools (Zapier, n8n, custom API calls) where applicable."""
+
+    triggers_str = ", ".join(payload.triggers) if payload.triggers else "Not specified"
+    prompt = f"Design a workflow for: {payload.description}\nTriggers: {triggers_str}"
+    result = await _generate_output(system, prompt, "complex")
+    return {"status": "success", "type": "workflow", "output": result["content"], "usage": result["usage"]}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
