@@ -50,15 +50,13 @@ def init_auth_db():
     """)
     conn.commit()
 
-    # Seed admin account if not exists
-    existing = conn.execute("SELECT id FROM users WHERE email = ?", ("robcofamily@gmail.com",)).fetchone()
-    if not existing:
-        pw_hash = bcrypt.hashpw(b"ArkhamAdmin2026!", bcrypt.gensalt()).decode()
-        conn.execute(
-            "INSERT INTO users (email, password_hash, name, tier) VALUES (?, ?, ?, ?)",
-            ("robcofamily@gmail.com", pw_hash, "Rob (Admin)", "admin")
-        )
-        conn.commit()
+    # Seed admin account if not exists (INSERT OR IGNORE for multi-worker safety)
+    pw_hash = bcrypt.hashpw(b"ArkhamAdmin2026!", bcrypt.gensalt()).decode()
+    conn.execute(
+        "INSERT OR IGNORE INTO users (email, password_hash, name, tier) VALUES (?, ?, ?, ?)",
+        ("robcofamily@gmail.com", pw_hash, "Rob (Admin)", "admin")
+    )
+    conn.commit()
 
     conn.close()
 
@@ -167,7 +165,7 @@ def reset_password_by_email(email: str, new_password: str) -> bool:
 # ----- JWT Tokens -----
 def create_token(user: dict) -> str:
     payload = {
-        "sub": user["id"],
+        "sub": str(user["id"]),
         "email": user["email"],
         "tier": user["tier"],
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
@@ -177,7 +175,9 @@ def create_token(user: dict) -> str:
 
 def decode_token(token: str) -> Optional[dict]:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        data = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        data["sub"] = int(data["sub"])
+        return data
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:

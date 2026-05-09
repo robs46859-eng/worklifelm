@@ -29,12 +29,26 @@ export default function OutputsPage() {
   const [topic, setTopic] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [saveMsg, setSaveMsg] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [savedOutputs, setSavedOutputs] = useState<Record<string, unknown>[]>([]);
+
+  const fetchSaved = async (archived: boolean) => {
+    const token = localStorage.getItem('wlm_token');
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/outputs/list?archived=${archived}`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.ok) { const data = await res.json(); setSavedOutputs(data.outputs || []); }
+    } catch { /* silent */ }
+  };
 
   // Auth gate
   useEffect(() => {
     const token = localStorage.getItem('wlm_token');
     if (!token) {
       window.location.href = '/login';
+    } else {
+      fetchSaved(false);
     }
   }, []);
 
@@ -218,15 +232,79 @@ export default function OutputsPage() {
           <div className="bg-[#111] border border-gray-800 rounded-lg p-6">
             <div className="flex justify-between items-center mb-4 pb-4 border-b border-gray-800">
               <h2 className="text-lg font-bold text-white">{OUTPUT_OPTIONS.find(o => o.key === selectedType)?.icon} {OUTPUT_OPTIONS.find(o => o.key === selectedType)?.label} Output</h2>
-              {(result.usage as Record<string, unknown>) && (
-                <span className="text-xs text-gray-500 font-mono">
-                  {((result.usage as Record<string, number>)?.input_tokens || 0) + ((result.usage as Record<string, number>)?.output_tokens || 0)} tokens · ${((result.usage as Record<string, number>)?.cost_usd || (result.output as Record<string, Record<string, number>>)?.usage?.cost_usd || 0).toFixed(4)}
-                </span>
-              )}
+              <div className="flex items-center space-x-3">
+                {(result.usage as Record<string, unknown>) && (
+                  <span className="text-xs text-gray-500 font-mono">
+                    {((result.usage as Record<string, number>)?.input_tokens || 0) + ((result.usage as Record<string, number>)?.output_tokens || 0)} tokens · ${((result.usage as Record<string, number>)?.cost_usd || 0).toFixed(4)}
+                  </span>
+                )}
+                <button onClick={async () => {
+                  const content = JSON.stringify(result, null, 2);
+                  const token = localStorage.getItem('wlm_token');
+                  const res = await fetch('/api/outputs/save', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ output_type: result.type, title: `${selectedType} - ${topic.slice(0, 40)}`, content, file_format: selectedType === 'report' || selectedType === 'pitch' ? 'md' : 'json' }) });
+                  if (res.ok) { setSaveMsg('Saved!'); setTimeout(() => setSaveMsg(''), 2000); }
+                }} className="px-3 py-1.5 bg-green-900/30 hover:bg-green-900/50 text-green-400 text-xs rounded border border-green-800/50 transition-colors">
+                  {saveMsg || '💾 Save'}
+                </button>
+                <button onClick={() => {
+                  const content = JSON.stringify(result, null, 2);
+                  const ext = selectedType === 'report' || selectedType === 'pitch' ? 'md' : 'json';
+                  const blob = new Blob([content], { type: ext === 'md' ? 'text/markdown' : 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = `${selectedType}_${Date.now()}.${ext}`; a.click();
+                  URL.revokeObjectURL(url);
+                }} className="px-3 py-1.5 bg-blue-900/30 hover:bg-blue-900/50 text-blue-400 text-xs rounded border border-blue-800/50 transition-colors">
+                  ⬇ Download
+                </button>
+              </div>
             </div>
             {renderResult()}
           </div>
         )}
+
+        {/* Saved Outputs Library */}
+        <div className="mt-12">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-white">Saved Outputs</h2>
+            <div className="flex space-x-2">
+              <button onClick={() => { setShowArchived(false); fetchSaved(false); }} className={`px-3 py-1 text-xs rounded ${!showArchived ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}>Active</button>
+              <button onClick={() => { setShowArchived(true); fetchSaved(true); }} className={`px-3 py-1 text-xs rounded ${showArchived ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}>Archived</button>
+            </div>
+          </div>
+          {savedOutputs.length === 0 ? (
+            <p className="text-sm text-gray-600 bg-[#111] border border-gray-800 rounded-lg p-6 text-center">
+              {showArchived ? 'No archived outputs.' : 'No saved outputs yet. Generate something and hit Save!'}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {savedOutputs.map((s: Record<string, unknown>) => (
+                <div key={s.id as number} className="bg-[#111] border border-gray-800 rounded-lg p-4 flex items-center justify-between hover:border-gray-700 transition-colors">
+                  <div>
+                    <span className="text-sm font-medium text-white">{s.title as string}</span>
+                    <span className="text-xs text-gray-500 ml-3">{s.output_type as string} · {s.file_format as string} · {(s.created_at as string)?.slice(0, 10)}</span>
+                  </div>
+                  <div className="flex space-x-2">
+                    <button onClick={async () => {
+                      const token = localStorage.getItem('wlm_token');
+                      const endpoint = showArchived ? `/api/outputs/${s.id}/unarchive` : `/api/outputs/${s.id}/archive`;
+                      await fetch(endpoint, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
+                      fetchSaved(showArchived);
+                    }} className="px-2 py-1 text-xs text-gray-400 hover:text-yellow-400 transition-colors">
+                      {showArchived ? '↩ Restore' : '📦 Archive'}
+                    </button>
+                    <button onClick={async () => {
+                      const token = localStorage.getItem('wlm_token');
+                      await fetch(`/api/outputs/${s.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+                      fetchSaved(showArchived);
+                    }} className="px-2 py-1 text-xs text-gray-400 hover:text-red-400 transition-colors">
+                      🗑 Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

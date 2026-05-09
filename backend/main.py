@@ -20,13 +20,20 @@ from billing import (
     create_checkout_session, handle_webhook_event, create_billing_portal,
     STRIPE_PUBLISHABLE_KEY,
 )
+from integrations import (
+    init_integrations_db, save_output, get_user_outputs, get_output_by_id,
+    archive_output, unarchive_output, delete_output,
+    invite_collaborator, get_project_collaborators, remove_collaborator,
+    get_user_integrations, SUPPORTED_PROVIDERS, OUTPUT_FORMATS,
+)
 
 app = FastAPI(title="WorkLifeLM Brain API")
 
-# Initialize auth database on startup
+# Initialize databases on startup
 @app.on_event("startup")
 def startup():
     init_auth_db()
+    init_integrations_db()
 
 # CORS for the Next.js frontend
 app.add_middleware(
@@ -1093,6 +1100,146 @@ Make it production-ready. Total duration should be approximately {req.duration_s
         "storyboard": result["content"],
         "usage": result["usage"],
     }
+
+
+# =====================================================================
+#  SAVED OUTPUTS, ARCHIVE & DOWNLOAD
+# =====================================================================
+
+class SaveOutputPayload(BaseModel):
+    output_type: str
+    title: str
+    content: str
+    file_format: str = "md"
+    project_id: str = "general"
+
+@app.post("/api/outputs/save")
+async def save_output_endpoint(payload: SaveOutputPayload, request: Request):
+    """Save a generated output for later retrieval."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    output_id = save_output(user["id"], payload.output_type, payload.title, payload.content, payload.file_format, payload.project_id)
+    return {"status": "saved", "output_id": output_id}
+
+
+@app.get("/api/outputs/list")
+async def list_outputs(request: Request, archived: bool = False):
+    """List saved outputs for the current user."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"outputs": get_user_outputs(user["id"], archived)}
+
+
+@app.get("/api/outputs/{output_id}/download")
+async def download_output(output_id: int, request: Request):
+    """Download a saved output as its native file type."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    output = get_output_by_id(user["id"], output_id)
+    if not output:
+        raise HTTPException(status_code=404, detail="Output not found")
+    fmt = OUTPUT_FORMATS.get(output["output_type"], {"ext": "txt", "mime": "text/plain"})
+    from fastapi.responses import Response
+    filename = f"{output['title'].replace(' ', '_')}.{fmt['ext']}"
+    return Response(
+        content=output["content"],
+        media_type=fmt["mime"],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/outputs/{output_id}/archive")
+async def archive_output_endpoint(output_id: int, request: Request):
+    """Move an output to the archive."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    archive_output(user["id"], output_id)
+    return {"status": "archived"}
+
+
+@app.post("/api/outputs/{output_id}/unarchive")
+async def unarchive_output_endpoint(output_id: int, request: Request):
+    """Restore an output from the archive."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    unarchive_output(user["id"], output_id)
+    return {"status": "unarchived"}
+
+
+@app.delete("/api/outputs/{output_id}")
+async def delete_output_endpoint(output_id: int, request: Request):
+    """Permanently delete a saved output."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    delete_output(user["id"], output_id)
+    return {"status": "deleted"}
+
+
+# =====================================================================
+#  COLLABORATORS (Paid Feature)
+# =====================================================================
+
+class InvitePayload(BaseModel):
+    project_id: str
+    email: str
+    role: str = "viewer"  # viewer | editor
+
+@app.post("/api/collaborators/invite")
+async def invite_collab(payload: InvitePayload, request: Request):
+    """Invite a collaborator to a project (Professional/Max only)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user["tier"] in ("free",):
+        raise HTTPException(status_code=403, detail="Collaborators require a Professional or Max plan")
+    result = invite_collaborator(user["id"], payload.project_id, payload.email, payload.role)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/api/collaborators/{project_id}")
+async def list_collaborators(project_id: str, request: Request):
+    """List collaborators for a project."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"collaborators": get_project_collaborators(project_id, user["id"])}
+
+
+@app.delete("/api/collaborators/{entry_id}")
+async def remove_collab(entry_id: int, request: Request):
+    """Remove a collaborator."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    remove_collaborator(user["id"], entry_id)
+    return {"status": "removed"}
+
+
+# =====================================================================
+#  INTEGRATIONS (Scaffold)
+# =====================================================================
+
+@app.get("/api/integrations/available")
+async def list_available_integrations():
+    """List all supported integrations and their status."""
+    return {"integrations": SUPPORTED_PROVIDERS}
+
+
+@app.get("/api/integrations/connected")
+async def list_connected(request: Request):
+    """List user's connected integrations."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"integrations": get_user_integrations(user["id"])}
 
 
 if __name__ == "__main__":
