@@ -26,8 +26,22 @@ from integrations import (
     invite_collaborator, get_project_collaborators, remove_collaborator,
     get_user_integrations, SUPPORTED_PROVIDERS, OUTPUT_FORMATS,
 )
+from search_router import router as search_router
+from workspace_memory import router as memory_router
+from language_engine import router as language_router
+from marketplace import router as marketplace_router
+from arkham_governance import router as governance_router
+from enterprise_layer import router as enterprise_router
 
 app = FastAPI(title="WorkLifeLM Brain API")
+
+# Include the new DAD Search, Memory, Language, Marketplace, Governance, and Enterprise routers
+app.include_router(search_router, prefix="/api/browser")
+app.include_router(memory_router, prefix="/api/memory")
+app.include_router(language_router, prefix="/api/language")
+app.include_router(marketplace_router, prefix="/api/marketplace")
+app.include_router(governance_router, prefix="/api/governance")
+app.include_router(enterprise_router, prefix="/api/enterprise")
 
 # Initialize databases on startup
 @app.on_event("startup")
