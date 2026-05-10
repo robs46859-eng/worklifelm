@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "WorkLifeLM — System Brain for AI Orchestration",
   description:
-    "Persistent vector memory, smart tiered model routing (Haiku 4.5 / Sonnet 4.6 / Opus 4.7), 8 output generators, and 5 operational agents — all in one platform.",
+    "Persistent vector memory, smart tiered model routing, 8 output generators, and 5 operational agents — all in one platform.",
 };
 
 export default function RootLayout({
@@ -26,9 +26,14 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+      </head>
+      <body className="min-h-full flex flex-col bg-[#031427] text-[#d3e4fe]">
+        {children}
+      </body>
     </html>
   );
 }
